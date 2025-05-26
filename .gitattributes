@@ -1,1 +1,2 @@
 Dados/*.csv filter=lfs diff=lfs merge=lfs -text
+resultados_versao_NP/*.csv filter=lfs diff=lfs merge=lfs -text
