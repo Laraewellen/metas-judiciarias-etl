@@ -1,19 +1,21 @@
+
+import os
+import time
 import pandas as pd
 import matplotlib.pyplot as plt
-import os
+from typing import Optional
+from tqdm import tqdm
+from rich.logging import RichHandler
+import logging
 
-print("-------------------------------------------")
-print("Iniciando o processamento das Metas dos Tribunais...")
-print("-------------------------------------------")
+logging.basicConfig(level="INFO", format="[%(asctime)s] %(levelname)s: %(message)s", datefmt="%H:%M:%S", handlers=[RichHandler()])
+log = logging.getLogger("rich")
 
 PASTA_CSV = 'dados'
 PASTA_RESULTADOS = 'resultados_versao_NP'
-
-print(f"\n[INFO] Verificando/Criando pasta de resultados: {PASTA_RESULTADOS}")
-os.makedirs(PASTA_RESULTADOS, exist_ok=True)
-
 ARQUIVO_RESUMO = os.path.join(PASTA_RESULTADOS, 'ResumoMetas.csv')
 ARQUIVO_CONSOLIDADO = os.path.join(PASTA_RESULTADOS, 'Consolidado.csv')
+GRAFICO_META1 = os.path.join(PASTA_RESULTADOS, 'grafico_meta1.png')
 
 fatores_metas_por_ramo = {
     'Justiça Estadual': {
@@ -51,160 +53,113 @@ fatores_metas_por_ramo = {
     }
 }
 fatores_padrao_je = fatores_metas_por_ramo['Justiça Estadual']
-ramos_definidos_com_fatores = set(fatores_metas_por_ramo.keys())
+ramos_definidos = set(fatores_metas_por_ramo.keys())
 
-def calcular_meta(df, col_julgado, col_distribuido, col_suspenso, fator):
+
+def calcular_meta(df: pd.DataFrame, col_j: str, col_d: str, col_s: str, fator: Optional[float]) -> str | float:
     try:
-        colunas_necessarias = [col_julgado, col_distribuido, col_suspenso]
-        if not all(coluna in df.columns for coluna in colunas_necessarias):
-            return 'NA'
-        num = df[col_julgado].sum()
-        den = df[col_distribuido].sum() - df[col_suspenso].sum()
-        if den == 0: return 'NA'
-        if fator == 'NA' or fator is None: return 'NA'
-        return round((num / den) * fator, 2)
+        if not all(c in df.columns for c in (col_j, col_d, col_s)): return 'NA'
+        den = df[col_d].sum() - df[col_s].sum()
+        if den == 0 or fator in [None, 'NA']: return 'NA'
+        return round((df[col_j].sum() / den) * fator, 2)
     except Exception: return 'NA'
 
-resultados = []
-todos_dados = []
 
-print("\n[INFO] Iniciando a leitura e processamento dos arquivos CSV da pasta 'dados'...")
-arquivos_csv_existentes = [f for f in os.listdir(PASTA_CSV) if f.endswith('.csv')]
-ramos_nao_mapeados_avisados = set()
+def gerar_grafico(df: pd.DataFrame, nome_meta: str, caminho_img: str):
+    col_numerica = pd.to_numeric(df[nome_meta], errors='coerce')
+    df_validos = df.copy()
+    df_validos[nome_meta + '_val'] = col_numerica
+    df_validos.dropna(subset=[nome_meta + '_val'], inplace=True)
+    if df_validos.empty:
+        log.warning(f"Nenhum valor válido para gerar gráfico de {nome_meta}.")
+        return
+    df_validos.sort_values(by=nome_meta + '_val', ascending=False, inplace=True)
+    plt.figure(figsize=(max(16, len(df_validos) * 0.6), 10))
+    plt.bar(df_validos['sigla_tribunal'], df_validos[nome_meta + '_val'], color='skyblue')
+    plt.title(f'Comparação da {nome_meta.upper()} entre os Tribunais')
+    plt.xticks(rotation=90, fontsize=8)
+    plt.tight_layout()
+    plt.savefig(caminho_img)
+    plt.close()
+    log.info(f"Gráfico salvo em: {caminho_img}")
 
-if not arquivos_csv_existentes:
-    print(f"[AVISO] Nenhum arquivo CSV encontrado na pasta: {PASTA_CSV}")
-else:
-    for i, arquivo in enumerate(arquivos_csv_existentes):
-        print(f"  -> Lendo arquivo: {arquivo} ({i+1}/{len(arquivos_csv_existentes)})")
-        caminho = os.path.join(PASTA_CSV, arquivo)
-        try:
-            df = pd.read_csv(caminho, sep=',', encoding='utf-8')
-            todos_dados.append(df)
 
-            if df.empty or 'sigla_tribunal' not in df.columns or 'ramo_justica' not in df.columns:
-                print(f"    [AVISO] Arquivo {arquivo} está vazio ou não contém colunas essenciais. Pulando...")
-                continue
+def salvar_csv(df: pd.DataFrame, caminho: str):
+    df.to_csv(caminho, index=False, encoding='utf-8', sep=';')
+    log.info(f"Arquivo salvo: {caminho}")
 
-            tribunal = df['sigla_tribunal'].iloc[0]
-            ramo_justica_csv = df['ramo_justica'].iloc[0]
-            ramo_para_fatores = ramo_justica_csv
-            
-            if ramo_justica_csv == "Tribunais Superiores":
-                if tribunal == "TST": ramo_para_fatores = "Tribunal Superior do Trabalho"
-                elif tribunal == "STJ": ramo_para_fatores = "Superior Tribunal de Justiça"
-            elif ramo_justica_csv == "Justiça Eleitoral": ramo_para_fatores = "Tribunal Superior Eleitoral"
 
-            if ramo_para_fatores not in ramos_definidos_com_fatores and ramo_justica_csv not in ramos_nao_mapeados_avisados:
-                print(f"    [AVISO] Ramo de justiça '{ramo_justica_csv}' (Tribunal: {tribunal}, Mapeado para: '{ramo_para_fatores}') não possui um conjunto de fatores de metas específico. Serão utilizados fatores padrão (baseados na Justiça Estadual).")
-                ramos_nao_mapeados_avisados.add(ramo_justica_csv)
+def processar_metas(df: pd.DataFrame, fatores: dict) -> dict:
+    metas = {}
+    config_metas = {
+        'meta2a':   ('julgm2_a', 'distm2_a', 'suspm2_a', fatores.get('2a')),
+        'meta2b':   ('julgm2_b', 'distm2_b', 'suspm2_b', fatores.get('2b')),
+        'meta2c':   ('julgm2_c', 'distm2_c', 'suspm2_c', fatores.get('2c')),
+        'meta2ant': ('julgm2_ant', 'distm2_ant', 'suspm2_ant', fatores.get('2ant')),
+        'meta4a':   ('julgm4_a', 'distm4_a', 'suspm4_a', fatores.get('4a')),
+        'meta4b':   ('julgm4_b', 'distm4_b', 'suspm4_b', fatores.get('4b')),
+        'meta6':    ('julgm6_a', 'distm6_a', 'suspm6_a', fatores.get('6')),
+        'meta7a':   ('julgm7_a', 'distm7_a', 'suspm7_a', fatores.get('7a')),
+        'meta7b':   ('julgm7_b', 'distm7_b', 'suspm7_b', fatores.get('7b')),
+        'meta8a':   ('julgm8_a', 'distm8_a', 'suspm8_a', fatores.get('8a')),
+        'meta8b':   ('julgm8_b', 'distm8_b', 'suspm8_b', fatores.get('8b')),
+        'meta10a':  ('julgm10_a', 'distm10_a', 'suspm10_a', fatores.get('10a')),
+        'meta10b':  ('julgm10_b', 'distm10_b', 'suspm10_b', fatores.get('10b')),
+        'meta8_stj': ('julgm8', 'dism8', 'suspm8', fatores.get('8')),
+        'meta10_stj': ('julgm10', 'dism10', 'suspm10', fatores.get('10')),
+    }
+    for meta, (j, d, s, f) in config_metas.items():
+        metas[meta] = calcular_meta(df, j, d, s, f)
+    return metas
 
-            fatores_especificos_ramo = fatores_metas_por_ramo.get(ramo_para_fatores, {})
-            meta1_calculada = 'NA'
-            colunas_meta1 = ['julgados_2025', 'casos_novos_2025', 'dessobrestados_2025', 'suspensos_2025']
-            if all(coluna in df.columns for coluna in colunas_meta1):
-                try:
-                    num_meta1 = df['julgados_2025'].sum()
-                    den_meta1 = df['casos_novos_2025'].sum() + df['dessobrestados_2025'].sum() - df['suspensos_2025'].sum()
-                    if den_meta1 == 0: meta1_calculada = 'NA'
-                    else: meta1_calculada = round((num_meta1 / den_meta1) * 100, 2)
-                except Exception: meta1_calculada = 'NA'
-            
-            metas_calculadas = {'meta1': meta1_calculada}
-            config_metas_gerais = {
-                'meta2a':   {'cols': ('julgm2_a', 'distm2_a', 'suspm2_a'), 'f_key': '2a'},
-                'meta2b':   {'cols': ('julgm2_b', 'distm2_b', 'suspm2_b'), 'f_key': '2b'},
-                'meta2c':   {'cols': ('julgm2_c', 'distm2_c', 'suspm2_c'), 'f_key': '2c'},
-                'meta2ant': {'cols': ('julgm2_ant', 'distm2_ant', 'suspm2_ant'), 'f_key': '2ant'},
-                'meta4a':   {'cols': ('julgm4_a', 'distm4_a', 'suspm4_a'), 'f_key': '4a'},
-                'meta4b':   {'cols': ('julgm4_b', 'distm4_b', 'suspm4_b'), 'f_key': '4b'},
-                'meta6':    {'cols': ('julgm6_a', 'distm6_a', 'suspm6_a'), 'f_key': '6'},
-                'meta7a':   {'cols': ('julgm7_a', 'distm7_a', 'suspm7_a'), 'f_key': '7a'},
-                'meta7b':   {'cols': ('julgm7_b', 'distm7_b', 'suspm7_b'), 'f_key': '7b'},
-                'meta8a':   {'cols': ('julgm8_a', 'distm8_a', 'suspm8_a'), 'f_key': '8a'},
-                'meta8b':   {'cols': ('julgm8_b', 'distm8_b', 'suspm8_b'), 'f_key': '8b'},
-                'meta10a':  {'cols': ('julgm10_a', 'distm10_a', 'suspm10_a'), 'f_key': '10a'},
-                'meta10b':  {'cols': ('julgm10_b', 'distm10_b', 'suspm10_b'), 'f_key': '10b'},
-            }
 
-            for nome_meta, config in config_metas_gerais.items():
-                fator_especifico = fatores_especificos_ramo.get(config['f_key'])
-                fator_final = fator_especifico if fator_especifico is not None else fatores_padrao_je.get(config['f_key'], 'NA')
-                col_j, col_d, col_s = config['cols']
-                metas_calculadas[nome_meta] = calcular_meta(df, col_j, col_d, col_s, fator_final)
+t0 = time.perf_counter()
+os.makedirs(PASTA_RESULTADOS, exist_ok=True)
+log.info("Iniciando processamento de dados...")
 
-            if ramo_para_fatores == 'Superior Tribunal de Justiça':
-                fator_stj_8 = fatores_especificos_ramo.get('8', 'NA')
-                metas_calculadas['meta8_stj'] = calcular_meta(df, 'julgm8', 'dism8', 'suspm8', fator_stj_8)
-                fator_stj_10 = fatores_especificos_ramo.get('10', 'NA')
-                metas_calculadas['meta10_stj'] = calcular_meta(df, 'julgm10', 'dism10', 'suspm10', fator_stj_10)
+arquivos_csv = [f for f in os.listdir(PASTA_CSV) if f.endswith('.csv')]
+resultados, todos_dados = [], []
 
-            linha_resultado = {'sigla_tribunal': tribunal, 'ramo_justica': ramo_justica_csv}
-            linha_resultado.update(metas_calculadas)
-            resultados.append(linha_resultado)
-        
-        except pd.errors.EmptyDataError: print(f"    [ERRO] Arquivo {arquivo} está vazio ou mal formatado. Pulando...")
-        except Exception as e: print(f"    [ERRO] Erro ao processar o arquivo {arquivo}: {e}. Pulando...")
-    
-    print("[INFO] Leitura e processamento dos arquivos CSV concluído.")
+for arquivo in tqdm(arquivos_csv, desc="Lendo CSVs"):
+    caminho = os.path.join(PASTA_CSV, arquivo)
+    try:
+        df = pd.read_csv(caminho)
+        if df.empty or 'sigla_tribunal' not in df.columns: continue
+        todos_dados.append(df)
 
-    if todos_dados:
-        print("\n[INFO] Gerando arquivo consolidado...")
-        df_consolidado = pd.concat(todos_dados, ignore_index=True)
-        df_consolidado.to_csv(ARQUIVO_CONSOLIDADO, index=False, encoding='utf-8', sep=';')
-        print(f"[OK] Arquivo consolidado salvo em: {ARQUIVO_CONSOLIDADO}")
-    else: print("[AVISO] Nenhum dado para consolidar.")
+        tribunal = df['sigla_tribunal'].iloc[0]
+        ramo = df['ramo_justica'].iloc[0]
+        if ramo == 'Tribunais Superiores':
+            ramo = {'TST': 'Tribunal Superior do Trabalho', 'STJ': 'Superior Tribunal de Justiça'}.get(tribunal, ramo)
+        elif ramo == 'Justiça Eleitoral':
+            ramo = 'Tribunal Superior Eleitoral'
 
-    if resultados:
-        print("\n[INFO] Gerando arquivo de resumo das metas...")
-        df_resultados_final = pd.DataFrame(resultados)
-        cols_principais = ['sigla_tribunal', 'ramo_justica', 'meta1']
-        cols_metas_numeradas = sorted([col for col in df_resultados_final.columns if col.startswith('meta') and col != 'meta1' and not col.endswith('_stj')])
-        cols_metas_stj = sorted([col for col in df_resultados_final.columns if col.endswith('_stj')])
-        cols_outras = sorted([col for col in df_resultados_final.columns if col not in cols_principais and not col.startswith('meta')])
-        
-        colunas_finais_unicas = []
-        for col_list in [cols_principais, cols_metas_numeradas, cols_metas_stj, cols_outras]:
-            for col in col_list:
-                if col in df_resultados_final.columns and col not in colunas_finais_unicas:
-                    colunas_finais_unicas.append(col)
-        for col in df_resultados_final.columns:
-            if col not in colunas_finais_unicas: colunas_finais_unicas.append(col)
-        
-        df_resultados_final = df_resultados_final[colunas_finais_unicas]
-        df_resultados_final.to_csv(ARQUIVO_RESUMO, index=False, encoding='utf-8', sep=';')
-        print(f"[OK] Arquivo de resumo salvo em: {ARQUIVO_RESUMO}")
+        fatores = fatores_metas_por_ramo.get(ramo, fatores_padrao_je)
 
-        if 'meta1' in df_resultados_final.columns:
-            print("\n[INFO] Gerando gráfico da Meta 1...")
-            df_resultados_final['meta1_numerica'] = pd.to_numeric(df_resultados_final['meta1'], errors='coerce')
-            df_validos_grafico = df_resultados_final.dropna(subset=['meta1_numerica']).copy()
-            
-            if not df_validos_grafico.empty:
-                df_validos_grafico.sort_values(by='meta1_numerica', ascending=False, inplace=True)
-                num_tribunais = len(df_validos_grafico['sigla_tribunal'])
-                fig_width = max(16, num_tribunais * 0.6)
-                xtick_fontsize = max(6, min(10, 200 / num_tribunais if num_tribunais > 0 else 10))
+        if all(c in df.columns for c in ['julgados_2025', 'casos_novos_2025', 'dessobrestados_2025', 'suspensos_2025']):
+            num = df['julgados_2025'].sum()
+            den = df['casos_novos_2025'].sum() + df['dessobrestados_2025'].sum() - df['suspensos_2025'].sum()
+            meta1 = round((num / den) * 100, 2) if den else 'NA'
+        else:
+            meta1 = 'NA'
 
-                plt.figure(figsize=(fig_width, 10))
-                plt.bar(df_validos_grafico['sigla_tribunal'], df_validos_grafico['meta1_numerica'], color='skyblue')
-                plt.title('Comparação da Meta 1 entre os Tribunais (Valores Válidos Ordenados)', fontsize=16)
-                plt.xlabel('Tribunal', fontsize=12)
-                plt.ylabel('Meta 1 (%)', fontsize=12)
-                plt.xticks(rotation=90, ha='center', fontsize=xtick_fontsize)
-                plt.yticks(fontsize=10)
-                plt.grid(axis='y', linestyle='--')
-                plt.tight_layout()
-                
-                caminho_grafico = os.path.join(PASTA_RESULTADOS, 'grafico_meta1.png')
-                plt.savefig(caminho_grafico)
-                plt.close()
-                print(f"[OK] Gráfico da Meta 1 salvo em: {caminho_grafico}")
-            else: print("[AVISO] Não há dados válidos da Meta 1 para gerar o gráfico.")
-        else: print("[AVISO] Coluna 'meta1' não encontrada no resumo para gerar o gráfico.")
-    else: print("[AVISO] Nenhum resultado foi processado para gerar o resumo ou gráfico.")
+        metas = processar_metas(df, fatores)
+        linha = {'sigla_tribunal': tribunal, 'ramo_justica': ramo, 'meta1': meta1}
+        linha.update(metas)
+        resultados.append(linha)
 
-print("\n-------------------------------------------")
-print("[INFO] Processo finalizado!")
-print(f"Verifique os arquivos na pasta: {PASTA_RESULTADOS}")
-print("-------------------------------------------")
+    except Exception as e:
+        log.error(f"Erro ao processar {arquivo}: {e}")
+
+if todos_dados:
+    log.info("Gerando arquivo consolidado...")
+    salvar_csv(pd.concat(todos_dados, ignore_index=True), ARQUIVO_CONSOLIDADO)
+
+if resultados:
+    log.info("Gerando arquivo de resumo das metas...")
+    df_final = pd.DataFrame(resultados)
+    salvar_csv(df_final, ARQUIVO_RESUMO)
+    log.info("Gerando gráfico comparativo da Meta 1...")
+    gerar_grafico(df_final, 'meta1', GRAFICO_META1)
+
+log.info(f"Tempo total de execução: {time.perf_counter() - t0:.2f} segundos")
