@@ -9,6 +9,7 @@ from rich.logging import RichHandler
 import logging
 import shutil
 from datetime import datetime
+import csv
 
 def obter_fatores_por_ramo(ramo_justica: str, sigla_tribunal: str) -> tuple[dict, str]:
     mapeamento_especial = {
@@ -116,7 +117,12 @@ def processar_arquivo_individual(args: Tuple[str, int, int]) -> Optional[Tuple[D
         timestamp_atual = datetime.now().strftime('%Y%m%d_%H%M%S')
         nome_arquivo_temporario = f"temp_{timestamp_atual}_{pid_processo}_{idx}_{nome_do_arquivo.replace(' ', '_').replace('.csv', '')}.csv"
         caminho_arquivo_temporario = os.path.join(PASTA_TEMP, nome_arquivo_temporario)
-        df.to_csv(caminho_arquivo_temporario, index=False, encoding='utf-8', sep=';')
+        
+        df.to_csv(caminho_arquivo_temporario, 
+                  index=False, 
+                  encoding='utf-8', 
+                  sep=';', 
+                  quoting=csv.QUOTE_NONNUMERIC)
 
         if 'sigla_tribunal' not in df.columns or 'ramo_justica' not in df.columns:
             return None, caminho_arquivo_temporario, f"Arquivo {nome_do_arquivo} sem coluna 'sigla_tribunal' ou 'ramo_justica'"
@@ -214,13 +220,13 @@ if __name__ == '__main__':
         log.warning("Nenhum CSV encontrado para processar.")
     else:
         log.info(f"Serão processados {num_total_csv} arquivos.")
-        num_workers = max(1, os.cpu_count() - 1 if os.cpu_count() else 1) # Garante pelo menos 1 worker
+        num_workers = max(1, os.cpu_count() - 1 if os.cpu_count() else 1)
         log.info(f"Utilizando {num_workers} workers.")
         
         with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
             map_results = list(tqdm(
                 executor.map(processar_arquivo_individual, lista_tarefas),
-                total=num_total_csv, desc="Processando CSVs (Paralelo)"))
+                total=num_total_csv, desc="Lendo CSVs (Paralelo)"))
 
             for resultado_map in map_results:
                 if resultado_map:
@@ -230,7 +236,7 @@ if __name__ == '__main__':
                     if aviso_res: avisos_gerais.add(aviso_res)
     
     if arquivos_temporarios_gerados:
-        log.info(f"Concatenando {len(arquivos_temporarios_gerados)} arquivos temporários para o consolidado...")
+        log.info(f"Concatenando {len(arquivos_temporarios_gerados)} arquivos para o consolidado...")
         with open(ARQUIVO_CONSOLIDADO, 'wb') as f_out_consolidado:
             primeiro_arquivo = True
             for arquivo_temp_path in tqdm(arquivos_temporarios_gerados, desc="Concatenando"):
