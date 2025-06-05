@@ -41,7 +41,7 @@ Ambas as versões realizam:
 
 1. Instale as dependências (se necessário):
 
-pip install pandas matplotlib tqdm rich
+- pip install pandas matplotlib tqdm rich
 
 
 2. Clone este repositório: [Repositório Metas Judiciárias ETL](https://github.com/Laraewellen/metas-judiciarias-etl.git)
