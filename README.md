@@ -21,11 +21,11 @@ Ambas as versões realizam:
 
 ## 🗃️ Estrutura de Pastas Esperada
 
-├── dados/ # Arquivos CSV de entrada
+├── dados/  `Arquivos CSV de entrada`
 
-├── resultados_versao_NP/ # Resultados da versão não paralela
+├── resultados_versao_NP/ `Resultados da versão não paralela`
 
-├── resultados_versao_P/ # Resultados da versão paralela
+├── resultados_versao_P/ `Resultados da versão paralela`
 
 ├── Versao_Np.py
 
