@@ -1,7 +1,6 @@
 # 🧾 TP06 – Análise de Metas do Judiciário com Processamento Paralelo
 
-### 👩‍💻 Desenvolvido por: Lara Ewellen De Carvalho Rocha  
-**Disciplina**: Programação Concorrente e Paralela – 1º Semestre de 2025
+**Disciplina**: Programação Concorrente e Paralela
 
 ---
 
