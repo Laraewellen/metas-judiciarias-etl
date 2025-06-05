@@ -46,9 +46,9 @@ Ambas as versões realizam:
 
 2. Clone este repositório: [Repositório Metas Judiciárias ETL](https://github.com/Laraewellen/metas-judiciarias-etl.git)
 
-3. Execute a versão **não paralela**:
+3. Execute a versão **não paralela**
    
-5. Execute a versão **paralela**:
+5. Execute a versão **paralela**
 
 
 ---
